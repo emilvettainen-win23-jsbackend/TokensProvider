@@ -43,7 +43,7 @@ public class ValidateTokenService
 		}
 		catch (Exception)
 		{
-			throw;
+            throw;
 		}
     }
 }

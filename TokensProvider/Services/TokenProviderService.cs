@@ -22,6 +22,7 @@ public class TokenProviderService
     {
         try
         {
+
             var tokenHandler = new JwtSecurityTokenHandler();
 
             var tokenDescriptor = new SecurityTokenDescriptor
@@ -45,7 +46,5 @@ public class TokenProviderService
         {
             throw;
         }
-
     }
-
 }
