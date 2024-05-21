@@ -2,7 +2,6 @@
 using System.IdentityModel.Tokens.Jwt;
 using System.Text;
 
-
 namespace TokensProvider.Services;
 
 public class ValidateTokenService

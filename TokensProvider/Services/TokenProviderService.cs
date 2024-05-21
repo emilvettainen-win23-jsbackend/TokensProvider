@@ -35,7 +35,7 @@ public class TokenProviderService
               }),
                 Issuer = _issuer,
                 Audience =_audience,
-                Expires = DateTime.Now.AddHours(1),
+                Expires = DateTime.Now.AddMinutes(10),
                 SigningCredentials = new SigningCredentials(new SymmetricSecurityKey(Encoding.UTF8.GetBytes(_secret)), SecurityAlgorithms.HmacSha256Signature)
             };
             var token = tokenHandler.CreateToken(tokenDescriptor);
