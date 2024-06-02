@@ -5,7 +5,7 @@ VisualStudioVersion = 17.9.34714.143
 MinimumVisualStudioVersion = 10.0.40219.1
 Project("{9A19103F-16F7-4668-BE54-9A1E7A4F7556}") = "TokensProvider", "TokensProvider\TokensProvider.csproj", "{53531634-83B6-458F-9FE8-C258675FEEA5}"
 EndProject
-Project("{FAE04EC0-301F-11D3-BF4B-00C04F79EFBC}") = "TokensProvider.Infrastructure", "TokensProvider.Infrastructure\TokensProvider.Infrastructure.csproj", "{33896B91-94AD-44B8-98D6-933CC9B1AFDD}"
+Project("{9A19103F-16F7-4668-BE54-9A1E7A4F7556}") = "TokensProvider.Infrastructure", "TokensProvider.Infrastructure\TokensProvider.Infrastructure.csproj", "{33896B91-94AD-44B8-98D6-933CC9B1AFDD}"
 EndProject
 Global
 	GlobalSection(SolutionConfigurationPlatforms) = preSolution

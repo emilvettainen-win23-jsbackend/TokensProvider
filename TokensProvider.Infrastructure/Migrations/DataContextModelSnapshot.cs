@@ -36,7 +36,7 @@ namespace TokensProvider.Infrastructure.Migrations
 
                     b.HasKey("RefreshToken");
 
-                    b.ToTable("RefreshTokens");
+                    b.ToTable("RefreshTokens", (string)null);
                 });
 #pragma warning restore 612, 618
         }

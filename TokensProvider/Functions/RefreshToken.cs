@@ -3,59 +3,81 @@ using Microsoft.AspNetCore.Mvc;
 using Microsoft.Azure.Functions.Worker;
 using Microsoft.Extensions.Logging;
 using Newtonsoft.Json;
+using System.Net;
+using TokensProvider.Infrastructure.Helper.Validations;
 using TokensProvider.Infrastructure.Models;
 using TokensProvider.Infrastructure.Services;
 
-namespace TokensProvider.Functions
+namespace TokensProvider.Functions;
+
+public class RefreshToken(ILogger<RefreshToken> logger, IRefreshTokenService refreshTokenService, ITokenGenerator tokenGenerator)
 {
-    public class RefreshToken(ILogger<RefreshToken> logger, IRefreshTokenService refreshTokenService, ITokenGenerator tokenGenerator)
+    private readonly ILogger<RefreshToken> _logger = logger;
+    private readonly IRefreshTokenService _refreshTokenService = refreshTokenService;
+    private readonly ITokenGenerator _tokenGenerator = tokenGenerator;
+
+    [Function("RefreshToken")]
+    public async Task<IActionResult> Run([HttpTrigger(AuthorizationLevel.Function, "post", Route = "token/refresh")] HttpRequest req)
     {
-        private readonly ILogger<RefreshToken> _logger = logger;
-        private readonly IRefreshTokenService _refreshTokenService = refreshTokenService;
-        private readonly ITokenGenerator _tokenGenerator = tokenGenerator;
 
-        [Function("RefreshToken")]
-        public async Task<IActionResult> Run([HttpTrigger(AuthorizationLevel.Function, "post", Route = "token/refresh")] HttpRequest req)
+        try
         {
-            var body = await new StreamReader(req.Body).ReadToEndAsync();
-            var tokenRequest = JsonConvert.DeserializeObject<TokenRequest>(body);
+            var request = await ValidateRequestAsync(req);
+            if (request == null)
+                return new BadRequestObjectResult(new { Error = "Invalid request body. Parameters userId and email must be provided" });
 
+            using var ctsTimeOut = new CancellationTokenSource(TimeSpan.FromSeconds(3));
+            using var cts = CancellationTokenSource.CreateLinkedTokenSource(ctsTimeOut.Token, req.HttpContext.RequestAborted);
 
-            if (tokenRequest == null || tokenRequest.UserId == null || tokenRequest.Email == null) 
-                return new BadRequestObjectResult(new { Error = "Please provide a valid userid and email address." });
+            RefreshTokenResult refreshTokenResult = null!;
+            req.HttpContext.Request.Cookies.TryGetValue("refreshToken", out var refreshToken);
+            if (string.IsNullOrEmpty(refreshToken))
+                return new UnauthorizedObjectResult(new { Error = "Refresh token was not found" });
 
-            try
-            {
-                RefreshTokenResult refreshTokenResult = null!;
-                AccessTokenResult accessTokenResult = null!;
+            refreshTokenResult = await _refreshTokenService.GetRefreshTokenAsync(refreshToken, cts.Token);
 
-                using var ctsTimeOut = new CancellationTokenSource(TimeSpan.FromSeconds(120*1000));
-                using var cts = CancellationTokenSource.CreateLinkedTokenSource(ctsTimeOut.Token, req.HttpContext.RequestAborted);
+            if (refreshTokenResult.ExpiryDate < DateTime.Now)
+                return new UnauthorizedObjectResult(new { Error = "Refresh token has expired" });
 
-                req.HttpContext.Request.Cookies.TryGetValue("refreshToken", out var refreshToken);
-                if (string.IsNullOrEmpty(refreshToken))
-                    return new UnauthorizedObjectResult(new { Error = "Refreshtoken was not found" });
+            if (refreshTokenResult.ExpiryDate < DateTime.Now.AddDays(1))
+                refreshTokenResult = await _tokenGenerator.GenerateRefreshTokenAsync(request.UserId, cts.Token);
 
-                refreshTokenResult = await _refreshTokenService.GetRefreshTokenAsync(refreshToken, cts.Token);
+            if (refreshTokenResult.StatusCode != (int)HttpStatusCode.OK)
+                return new ObjectResult(new { refreshTokenResult.Error }) { StatusCode = refreshTokenResult.StatusCode };
 
-                if (refreshTokenResult.ExpiryDate < DateTime.Now)
-                    return new UnauthorizedObjectResult(new { Error = "Refresh token has expired" });
+            AccessTokenResult accessTokenResult = null!;
+            accessTokenResult = _tokenGenerator.GenerateAccessToken(request, refreshTokenResult.Token);
 
-                if (refreshTokenResult == null || refreshTokenResult.ExpiryDate < DateTime.Now.AddDays(1))
-                    refreshTokenResult = await _tokenGenerator.GenerateRefreshTokenAsync(tokenRequest.UserId, cts.Token);
+            if (accessTokenResult.StatusCode != (int)HttpStatusCode.OK)
+                return new ObjectResult(new { accessTokenResult.Error }) { StatusCode = accessTokenResult.StatusCode };
 
-                accessTokenResult = _tokenGenerator.GenerateAccessToken(tokenRequest, refreshTokenResult.Token);
+            if (refreshTokenResult.Token != null && refreshTokenResult.CookieOptions != null)
+                req.HttpContext.Response.Cookies.Append("refreshToken", refreshTokenResult.Token, refreshTokenResult.CookieOptions);
 
-                if (refreshTokenResult.Token != null && refreshTokenResult.CookieOptions != null)
-                    req.HttpContext.Response.Cookies.Append("refreshToken", refreshTokenResult.Token, refreshTokenResult.CookieOptions);
-
-                if (accessTokenResult != null && accessTokenResult.Token != null && refreshTokenResult.Token != null)
-                    return new OkObjectResult(new { AccessToken = accessTokenResult.Token, refreshTokenResult.Token });
-
-            }
-            catch { }
-
-            return new UnauthorizedObjectResult(new { Error = "Refresh token has expired" });
+            return new OkObjectResult(new { AccessToken = accessTokenResult.Token });
         }
+        catch (OperationCanceledException)
+        {
+            return new StatusCodeResult(StatusCodes.Status408RequestTimeout);
+        }
+        catch (Exception ex)
+        {
+            _logger.LogError($"ERROR : GenerateToken.Run() :: {ex.Message}");
+            return new StatusCodeResult(StatusCodes.Status500InternalServerError);
+        }
+    }
+
+
+    private async Task<TokenRequest> ValidateRequestAsync(HttpRequest req)
+    {
+        using var reader = new StreamReader(req.Body);
+        var requestBody = await reader.ReadToEndAsync();
+        var request = JsonConvert.DeserializeObject<TokenRequest>(requestBody);
+        if (request == null)
+        {
+            return null!;
+        }
+        var modelState = CustomValidation.ValidateModel(request);
+        return modelState.IsValid ? request : null!;
     }
 }
