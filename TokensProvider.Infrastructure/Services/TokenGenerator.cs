@@ -1,4 +1,5 @@
-﻿using Microsoft.IdentityModel.Tokens;
+﻿using Microsoft.Extensions.Configuration;
+using Microsoft.IdentityModel.Tokens;
 using System.IdentityModel.Tokens.Jwt;
 using System.Net;
 using System.Security.Claims;
@@ -13,9 +14,10 @@ public interface ITokenGenerator
     Task<RefreshTokenResult> GenerateRefreshTokenAsync(string userId, CancellationToken cancellationToken);
 }
 
-public class TokenGenerator(IRefreshTokenService refreshTokenService) : ITokenGenerator
+public class TokenGenerator(IRefreshTokenService refreshTokenService, IConfiguration configuration) : ITokenGenerator
 {
     private readonly IRefreshTokenService _refreshTokenService = refreshTokenService;
+    private readonly IConfiguration _configuration = configuration;
 
     #region GenerateRefreshTokenAsync
     public async Task<RefreshTokenResult> GenerateRefreshTokenAsync(string userId, CancellationToken cancellationToken)
@@ -36,7 +38,7 @@ public class TokenGenerator(IRefreshTokenService refreshTokenService) : ITokenGe
 
             var cookieOptions = CookieGenerator.GenerateCookie(DateTimeOffset.Now.AddDays(7));
             if (cookieOptions == null)
-                return new RefreshTokenResult { StatusCode = (int)HttpStatusCode.InternalServerError, Error = "An unexpected error occured while token was generated." };
+                return new RefreshTokenResult { StatusCode = (int)HttpStatusCode.InternalServerError, Error = "An unexpected error occured while cookie was generated." };
 
             var result = await _refreshTokenService.SaveRefreshTokenAsync(token, userId, cancellationToken);
             if (!result)
@@ -48,7 +50,6 @@ public class TokenGenerator(IRefreshTokenService refreshTokenService) : ITokenGe
                 Token = token,
                 CookieOptions = cookieOptions
             };
-
         }
         catch (Exception ex)
         {
@@ -94,14 +95,15 @@ public class TokenGenerator(IRefreshTokenService refreshTokenService) : ITokenGe
     #region GenerateJwtToken
     public static string GenerateJwtToken(ClaimsIdentity claims, DateTime expires)
     {
+
         var tokenHandler = new JwtSecurityTokenHandler();
         var tokenDescriptor = new SecurityTokenDescriptor
         {
             Subject = claims,
             Expires = expires,
-            Issuer = Environment.GetEnvironmentVariable("TOKEN_ISSUER"),
-            Audience = Environment.GetEnvironmentVariable("TOKEN_AUDIENCE"),
-            SigningCredentials = new SigningCredentials(new SymmetricSecurityKey(Encoding.UTF8.GetBytes(Environment.GetEnvironmentVariable("TOKEN_SECRETKEY")!)), SecurityAlgorithms.HmacSha256Signature)
+            Issuer = Environment.GetEnvironmentVariable("TokenIssuer"),
+            Audience = Environment.GetEnvironmentVariable("TokenAudience"),
+            SigningCredentials = new SigningCredentials(new SymmetricSecurityKey(Encoding.UTF8.GetBytes(Environment.GetEnvironmentVariable("TokenKey")!)), SecurityAlgorithms.HmacSha256Signature)
         };
 
         var token = tokenHandler.CreateToken(tokenDescriptor);

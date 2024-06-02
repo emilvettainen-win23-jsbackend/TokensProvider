@@ -3,111 +3,67 @@ using Microsoft.AspNetCore.Mvc;
 using Microsoft.Azure.Functions.Worker;
 using Microsoft.Extensions.Logging;
 using Newtonsoft.Json;
+using System.Net;
+using TokensProvider.Infrastructure.Helper.Validations;
 using TokensProvider.Infrastructure.Models;
 using TokensProvider.Infrastructure.Services;
 
-namespace TokensProvider.Functions
+namespace TokensProvider.Functions;
+
+public class GenerateToken(ILogger<GenerateToken> logger, ITokenGenerator tokenGenerator, IRefreshTokenService refreshTokenService)
 {
-    public class GenerateToken(ILogger<GenerateToken> logger, ITokenGenerator tokenGenerator, IRefreshTokenService refreshTokenService)
+    private readonly ILogger<GenerateToken> _logger = logger;
+    private readonly ITokenGenerator _tokenGenerator = tokenGenerator;
+    private readonly IRefreshTokenService _refreshTokenService = refreshTokenService;
+
+
+    [Function("GenerateToken")]
+    public async Task<IActionResult> Run([HttpTrigger(AuthorizationLevel.Function, "post", Route = "token/generate")] HttpRequest req)
     {
-        private readonly ILogger<GenerateToken> _logger = logger;
-        private readonly ITokenGenerator _tokenGenerator = tokenGenerator;
-        private readonly IRefreshTokenService _refreshTokenService = refreshTokenService;
-
-
-        [Function("GenerateToken")]
-        public async Task<IActionResult> Run([HttpTrigger(AuthorizationLevel.Function, "post", Route = "token/generate")] HttpRequest req)
+        try
         {
-            //var body = await new StreamReader(req.Body).ReadToEndAsync();
-            //var tokenRequest = JsonConvert.DeserializeObject<TokenRequest>(body);
+            var request = await ValidateRequestAsync(req);
+            if (request == null)
+                return new BadRequestObjectResult(new {Error = "Invalid request body. Parameters userId and email must be provided" });
 
-            //if (tokenRequest == null || string.IsNullOrEmpty(tokenRequest.UserId) || string.IsNullOrEmpty(tokenRequest.Email))
-            //{
-            //    return new BadRequestObjectResult(new { Error = "Please provide a valid userid and email address." });
-            //}
+            using var ctsTimeOut = new CancellationTokenSource(TimeSpan.FromSeconds(3));
+            using var cts = CancellationTokenSource.CreateLinkedTokenSource(ctsTimeOut.Token, req.HttpContext.RequestAborted);
 
-            //try
-            //{
-            //    var tokenGenerator = new TokenGenerator(null!);
+            var refreshTokenResult = await _tokenGenerator.GenerateRefreshTokenAsync(request.UserId, cts.Token);
+            if (refreshTokenResult.StatusCode != (int)HttpStatusCode.OK)
+                return new ObjectResult(new { refreshTokenResult.Error}){ StatusCode = refreshTokenResult.StatusCode};
 
-            //    var accessTokenResult = tokenGenerator.GenerateAccessToken(tokenRequest, null);
+            var accessTokenResult = _tokenGenerator.GenerateAccessToken(request, refreshTokenResult.Token);
+            if (accessTokenResult.StatusCode != (int)HttpStatusCode.OK)
+                return new ObjectResult(new {accessTokenResult.Error}) { StatusCode = accessTokenResult.StatusCode };
 
-            //    if (accessTokenResult == null || string.IsNullOrEmpty(accessTokenResult.Token))
-            //    {
-            //        return new UnauthorizedObjectResult(new { Error = "Failed to generate access token." });
-            //    }
+            if (refreshTokenResult.Token != null && refreshTokenResult.CookieOptions != null)
+                req.HttpContext.Response.Cookies.Append("refreshToken", refreshTokenResult.Token, refreshTokenResult.CookieOptions);
 
-            //    return new OkObjectResult(new { AccessToken = accessTokenResult.Token });
-            //}
-            //catch
-            //{
-            //    return new UnauthorizedObjectResult(new { Error = "Failed to generate access token." });
-            //}
-
-
-            //WITH REFRESHTOKEN
-
-            //var body = await new StreamReader(req.Body).ReadToEndAsync();
-            //var tokenRequest = JsonConvert.DeserializeObject<TokenRequest>(body);
-
-            //if (tokenRequest == null || string.IsNullOrEmpty(tokenRequest.UserId) || string.IsNullOrEmpty(tokenRequest.Email))
-            //    return new BadRequestObjectResult(new { Error = "Please provide a valid userid and email address." });
-
-            //try
-            //{
-            //    var accessTokenResult = _tokenGenerator.GenerateAccessToken(tokenRequest, null);
-            //    var refreshTokenResult = await _tokenGenerator.GenerateRefreshTokenAsync(tokenRequest.UserId, CancellationToken.None);
-
-            //    if (accessTokenResult == null || string.IsNullOrEmpty(accessTokenResult.Token) || refreshTokenResult == null || string.IsNullOrEmpty(refreshTokenResult.Token))
-            //        return new UnauthorizedObjectResult(new { Error = "Failed to generate tokens." });
-
-            //    return new OkObjectResult(new { AccessToken = accessTokenResult.Token, refreshTokenResult.Token });
-
-            //    //return new OkObjectResult(new { AccessToken = accessTokenResult.Token, RefreshToken = refreshTokenResult.Token });
-            //}
-            //catch
-            //{
-            //    return new UnauthorizedObjectResult(new { Error = "Failed to generate tokens." });
-            //}
-
-            var body = await new StreamReader(req.Body).ReadToEndAsync();
-            var tokenRequest = JsonConvert.DeserializeObject<TokenRequest>(body);
-
-
-            if (tokenRequest == null || tokenRequest.UserId == null || tokenRequest.Email == null)
-                return new BadRequestObjectResult(new { Error = "Please provide a valid userid and email address." });
-
-            try
-            {
-                RefreshTokenResult refreshTokenResult = null!;
-                AccessTokenResult accessTokenResult = null!;
-
-                using var ctsTimeOut = new CancellationTokenSource(TimeSpan.FromSeconds(120 * 1000));
-                using var cts = CancellationTokenSource.CreateLinkedTokenSource(ctsTimeOut.Token, req.HttpContext.RequestAborted);
-
-                req.HttpContext.Request.Cookies.TryGetValue("refreshToken", out var refreshToken);
-                if (!string.IsNullOrEmpty(refreshToken))
-
-                refreshTokenResult = await _refreshTokenService.GetRefreshTokenAsync(refreshToken, cts.Token);
-
-                //if (refreshTokenResult.ExpiryDate < DateTime.Now)
-                //    return new UnauthorizedObjectResult(new { Error = "Refresh token has expired" });
-
-                //if (refreshTokenResult == null || refreshTokenResult.ExpiryDate < DateTime.Now.AddDays(1))
-                //    refreshTokenResult = await _tokenGenerator.GenerateRefreshTokenAsync(tokenRequest.UserId, cts.Token);
-
-                accessTokenResult = _tokenGenerator.GenerateAccessToken(tokenRequest, refreshTokenResult.Token);
-
-                if (refreshTokenResult.Token != null && refreshTokenResult.CookieOptions != null)
-                    req.HttpContext.Response.Cookies.Append("refreshToken", refreshTokenResult.Token, refreshTokenResult.CookieOptions);
-
-                if (accessTokenResult != null && accessTokenResult.Token != null && refreshTokenResult.Token != null)
-                    return new OkObjectResult(new { AccessToken = accessTokenResult.Token, refreshTokenResult.Token });
-
-            }
-            catch { }
-
-            return new UnauthorizedObjectResult(new { Error = "Refresh token has expired" });
+            return new OkObjectResult( new {AccessToken = accessTokenResult.Token});
         }
+        catch (OperationCanceledException)
+        {
+            return new StatusCodeResult(StatusCodes.Status408RequestTimeout);
+        }
+        catch (Exception ex)
+        {
+            _logger.LogError($"ERROR : GenerateToken.Run() :: {ex.Message}");
+            return new StatusCodeResult(StatusCodes.Status500InternalServerError);
+        }
+    }
+
+
+    private async Task <TokenRequest> ValidateRequestAsync(HttpRequest req)
+    {
+        using var reader = new StreamReader(req.Body);
+        var requestBody = await reader.ReadToEndAsync();
+        var request = JsonConvert.DeserializeObject<TokenRequest>(requestBody);
+        if (request == null)
+        {
+            return null!;
+        }
+        var modelState = CustomValidation.ValidateModel(request);
+        return modelState.IsValid ? request : null!;
     }
 }
